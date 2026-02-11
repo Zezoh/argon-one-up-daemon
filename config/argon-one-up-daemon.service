@@ -18,7 +18,7 @@ ProtectHome=true
 PrivateTmp=true
 NoNewPrivileges=true
 
-# Device access
+# Device access (includes support for Raspberry Pi 5 - gpiochip4)
 DeviceAllow=/dev/i2c-1 rw
 DeviceAllow=/dev/gpiochip0 rw
 DeviceAllow=/dev/gpiochip1 rw
