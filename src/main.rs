@@ -19,6 +19,13 @@ use env_logger;
 const R_SENSE: f64 = 10.0;
 const PIN_LID: u8 = 27;
 
+// CW2217B Datasheet Constants
+const VCELL_LSB_VOLTS: f64 = 305e-6;  // 305 µV per LSB
+const TEMP_LSB_SCALE: f64 = 10.0;     // Temperature resolution: 0.1°C per LSB
+const TEMP_OFFSET_CELSIUS: f64 = 40.0; // Temperature offset per datasheet
+const CURRENT_SCALE_FACTOR: f64 = 52.4; // Current calculation scaling factor from datasheet
+const CURRENT_ADC_RESOLUTION: f64 = 32768.0; // 15-bit signed ADC resolution
+
 // IC: CellWise CW2217B (CW2217BAAD)
 const ADDR_BATTERY: u8 = 0x64;
 const REG_CONTROL: u8 = 0x01;
@@ -56,16 +63,18 @@ impl UPowerManager {
     fn enumerate_devices(&self) -> Vec<zbus::zvariant::OwnedObjectPath> {
         const BATTERY_PATH: &str = "/org/freedesktop/UPower/devices/battery_argon";
         vec![
+            // This static string is known to be valid, so expect() is safe here
             zbus::zvariant::ObjectPath::from_static_str(BATTERY_PATH)
-                .expect("Invalid static object path")
+                .expect("Static object path is valid")
                 .into()
         ]
     }
 
     fn get_display_device(&self) -> zbus::zvariant::OwnedObjectPath {
         const BATTERY_PATH: &str = "/org/freedesktop/UPower/devices/battery_argon";
+        // This static string is known to be valid, so expect() is safe here
         zbus::zvariant::ObjectPath::from_static_str(BATTERY_PATH)
-            .expect("Invalid static object path")
+            .expect("Static object path is valid")
             .into()
     }
 
@@ -222,7 +231,7 @@ impl HardwareManager {
 
         // Fix voltage calculation - use both high and low bytes (14-bit value)
         let raw_voltage = ((v_raw_h as u16) << 8) | (v_raw_l as u16);
-        let voltage = raw_voltage as f64 * 305.0 / 1_000_000.0;  // 305 µV per LSB
+        let voltage = raw_voltage as f64 * VCELL_LSB_VOLTS;
 
         // Fix SOC calculation - use both high and low bytes
         let soc = (soc_raw_high as f64) + (soc_raw_low as f64 / 256.0);
@@ -233,10 +242,10 @@ impl HardwareManager {
 
         // Fix temperature calculation - use both high and low bytes (16-bit value)
         let temp_raw = ((temp_h as u16) << 8) | (temp_l as u16);
-        let temperature = temp_raw as f64 / 10.0 - 40.0;
+        let temperature = temp_raw as f64 / TEMP_LSB_SCALE - TEMP_OFFSET_CELSIUS;
 
-        // CW2217B Current Calculation:
-        let current = (52.4 * raw_current as f64 ) / (32768.0 * R_SENSE);
+        // CW2217B Current Calculation per datasheet
+        let current = (CURRENT_SCALE_FACTOR * raw_current as f64) / (CURRENT_ADC_RESOLUTION * R_SENSE);
         let power = (voltage * current).abs();
 
         // AC DETECTION LOGIC:
