@@ -185,7 +185,36 @@ if systemctl is-active --quiet argon-one-up-daemon; then
     sudo journalctl -u argon-one-up-daemon -n 5 --no-pager | tail -n 5
 else
     echo "Daemon not running - showing last error:"
-    sudo journalctl -u argon-one-up-daemon -n 10 --no-pager | grep -i "error\|fail" | tail -n 3
+    RECENT_LOGS=$(sudo journalctl -u argon-one-up-daemon -n 10 --no-pager | grep -i "error\|fail" | tail -n 3)
+    echo "$RECENT_LOGS"
+    
+    # Check for specific GPIO permission error
+    if echo "$RECENT_LOGS" | grep -q "GPIO Error.*Operation not permitted"; then
+        echo ""
+        print_fail "GPIO Permission Error Detected!"
+        print_info ""
+        print_info "This error occurs when the daemon cannot access GPIO devices."
+        print_info ""
+        print_info "SOLUTION - Run these commands to fix:"
+        print_info ""
+        print_info "  1. Stop any conflicting UPower service first:"
+        print_info "     sudo systemctl stop upower"
+        print_info "     sudo systemctl disable upower"
+        print_info ""
+        print_info "  2. Ensure proper permissions:"
+        print_info "     sudo chmod 666 /dev/gpiochip*"
+        print_info "     sudo chmod 666 /dev/i2c-1"
+        print_info ""
+        print_info "  3. Restart the daemon:"
+        print_info "     sudo systemctl restart argon-one-up-daemon"
+        print_info ""
+        print_info "  4. Check status:"
+        print_info "     sudo systemctl status argon-one-up-daemon"
+        print_info ""
+        print_info "NOTE: The daemon runs as root, so permissions should normally work."
+        print_info "If the error persists, the issue may be with systemd restrictions."
+        ISSUES=$((ISSUES + 1))
+    fi
 fi
 
 echo ""

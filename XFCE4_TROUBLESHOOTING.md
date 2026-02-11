@@ -332,13 +332,85 @@ sudo journalctl -u argon-one-up-daemon -n 10 --no-pager
 2. Reboot: `sudo reboot`
 3. Verify: `sudo i2cdetect -y 1`
 
-### Issue: "Permission denied accessing GPIO"
+### Issue: "GPIO Error: Operation not permitted" or "Permission denied accessing GPIO"
 
-**Solution:**
+This error occurs when the daemon cannot access GPIO devices, typically showing:
+```
+Error: Failure("GPIO Error: I/O error: Operation not permitted (os error 1)")
+```
+
+**Root Causes:**
+1. System UPower service is blocking the D-Bus name
+2. Insufficient permissions on GPIO/I2C devices
+3. Systemd service restrictions preventing device access
+
+**Solution (Step-by-step):**
+
+**Step 1: Stop conflicting UPower service**
 ```bash
+# The system UPower service may be blocking our daemon
+sudo systemctl stop upower
+sudo systemctl disable upower
+```
+
+**Step 2: Ensure device permissions**
+```bash
+# Check current permissions
+ls -l /dev/gpiochip*
+ls -l /dev/i2c-1
+
+# On some systems, these may need to be accessible
+# Note: The daemon runs as root, so this is usually not needed
+# But if DeviceAllow in systemd is blocking access, try:
+sudo chmod 666 /dev/gpiochip*
+sudo chmod 666 /dev/i2c-1
+```
+
+**Step 3: Verify user groups (if running daemon manually)**
+```bash
+# Add your user to required groups
 sudo usermod -aG gpio,i2c $USER
 # Log out and back in for group changes to take effect
 ```
+
+**Step 4: Check systemd service configuration**
+```bash
+# Verify the service file has correct DeviceAllow entries
+cat /etc/systemd/system/argon-one-up-daemon.service | grep DeviceAllow
+# Should show:
+# DeviceAllow=/dev/i2c-1 rw
+# DeviceAllow=/dev/gpiochip0 rw
+# DeviceAllow=/dev/gpiochip1 rw
+# DeviceAllow=/dev/gpiochip2 rw
+# DeviceAllow=/dev/gpiochip3 rw
+# DeviceAllow=/dev/gpiochip4 rw
+```
+
+**Step 5: Restart the daemon**
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart argon-one-up-daemon
+```
+
+**Step 6: Verify it's working**
+```bash
+sudo systemctl status argon-one-up-daemon
+# Should show: Active: active (running)
+
+# Check logs for any errors
+sudo journalctl -u argon-one-up-daemon -n 20
+```
+
+**If still failing:**
+Check if there's a D-Bus conflict:
+```bash
+# See what process owns the UPower name
+dbus-send --system --print-reply --dest=org.freedesktop.DBus \
+  /org/freedesktop/DBus org.freedesktop.DBus.GetNameOwner \
+  string:"org.freedesktop.UPower"
+```
+
+The daemon MUST be the only service claiming `org.freedesktop.UPower` on D-Bus.
 
 ### Issue: "D-Bus name already owned by another process"
 

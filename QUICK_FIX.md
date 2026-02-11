@@ -76,6 +76,24 @@ sudo systemctl reload dbus
 sudo systemctl restart argon-one-up-daemon
 ```
 
+### Issue 5: GPIO Permission Error
+**Symptom:** Daemon fails with "GPIO Error: Operation not permitted"
+
+This happens when the system UPower service is blocking the D-Bus name.
+
+**Fix:**
+```bash
+# Stop the conflicting service
+sudo systemctl stop upower
+sudo systemctl disable upower
+
+# Restart our daemon
+sudo systemctl restart argon-one-up-daemon
+
+# Verify it's working
+sudo systemctl status argon-one-up-daemon
+```
+
 ---
 
 ## Detailed Documentation
