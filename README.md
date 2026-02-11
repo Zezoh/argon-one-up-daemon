@@ -6,9 +6,10 @@ This daemon replaces the original Python scripts and provides native integration
 
 ## Compatibility
 
-* **Raspberry Pi Models**: Pi 3, Pi 4, **Pi 5** (tested)
+* **Raspberry Pi Models**: Pi 3, Pi 4, **Pi 5**, Compute Module 4, **Compute Module 5** (CM5)
 * **Operating Systems**: Raspberry Pi OS (Bookworm, Trixie), Debian-based distributions
 * **Desktop Environments**: XFCE, KDE Plasma, GNOME, or any DE with UPower support
+* **GPIO Controllers**: BCM2835, BCM2711, RP1 (auto-detected)
 
 ## Features
 
@@ -67,13 +68,14 @@ sudo systemctl enable --now argon-one-up-daemon
 
 ## Troubleshooting
 
-### Raspberry Pi 5 Notes
+### Raspberry Pi 5 and Compute Module 5 (CM5) Notes
 
-On Raspberry Pi 5, the GPIO controller has changed from BCM2711 to RP1. The daemon automatically detects and uses the correct GPIO chip. If you encounter GPIO-related errors:
+On Raspberry Pi 5 and CM5, the GPIO controller has changed from BCM2711 to RP1. The daemon automatically detects and uses the correct GPIO chip. If you encounter GPIO-related errors:
 
 1. Verify your user is in the `gpio` group: `sudo usermod -aG gpio $USER`
 2. Check that `/dev/gpiochip4` exists: `ls -l /dev/gpiochip*`
 3. Ensure I2C is enabled in `raspi-config`
+4. Verify battery IC is detected: `sudo i2cdetect -y 1` (should show device at 0x64)
 
 ### XFCE Desktop Environment
 
@@ -101,6 +103,11 @@ dbus-send --system --print-reply --dest=org.freedesktop.UPower \
   org.freedesktop.DBus.Properties.GetAll \
   string:"org.freedesktop.UPower.Device"
 ```
+
+## Documentation
+
+- **[HARDWARE.md](HARDWARE.md)** - Complete hardware configuration guide with all device IDs, GPIO pins, I2C addresses, and register mappings
+- **[CODE_EXPLAINED.md](CODE_EXPLAINED.md)** - Detailed code explanation of how the daemon works
 
 ## License
 

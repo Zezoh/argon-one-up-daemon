@@ -1,5 +1,20 @@
 // Argon ONE UP Laptop Daemon (Integrated Version)
 // License: GPL-3.0
+//
+// Hardware Configuration:
+// - Battery IC: CellWise CW2217B at I2C address 0x64 on bus 1
+// - GPIO Pin 4: Power button (active low, pull-up enabled)
+// - GPIO Pin 27: Lid sensor (active low, pull-up enabled)
+// 
+// Supported Platforms:
+// - Raspberry Pi 3 (BCM2835/BCM2837, gpiochip0)
+// - Raspberry Pi 4 (BCM2711, gpiochip0)
+// - Raspberry Pi 5 (RP1, gpiochip4)
+// - Compute Module 4 (BCM2711, gpiochip0)
+// - Compute Module 5 (RP1, gpiochip4)
+//
+// See HARDWARE.md for complete hardware specifications
+// See CODE_EXPLAINED.md for detailed code documentation
 
 const VERSION: &str = "V6.5";
 
