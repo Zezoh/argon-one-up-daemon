@@ -68,6 +68,36 @@ sudo systemctl enable --now argon-one-up-daemon
 
 ## Troubleshooting
 
+### ⚠️ Service Won't Start? (auto-restart loop)
+
+If you see this when checking status:
+```bash
+sudo systemctl status argon-one-up-daemon
+# Shows: Active: activating (auto-restart) (Result: exit-code)
+#        Process: ... (code=exited, status=1/FAILURE)
+```
+
+**This is caused by the system UPower service blocking the D-Bus name.**
+
+**IMMEDIATE FIX (4 commands):**
+
+```bash
+# 1. Stop the conflicting service
+sudo systemctl stop upower
+sudo systemctl disable upower
+
+# 2. Restart the daemon
+sudo systemctl restart argon-one-up-daemon
+
+# 3. Verify it's working
+sudo systemctl status argon-one-up-daemon
+# Should show: Active: active (running)
+```
+
+**For detailed explanation:** See **[GPIO_FIX.md](GPIO_FIX.md)**
+
+---
+
 ### 🔋 Battery Not Showing in XFCE4 Taskbar?
 
 **Run the diagnostic script first:**
@@ -153,7 +183,10 @@ dbus-send --system --print-reply --dest=org.freedesktop.UPower \
 
 ## Documentation
 
+- **[SERVICE_TROUBLESHOOTING.md](SERVICE_TROUBLESHOOTING.md)** - ⚠️ **Service won't start? See this first!**
+- **[GPIO_FIX.md](GPIO_FIX.md)** - 🔧 **Quick fix for "GPIO Error: Operation not permitted"**
 - **[XFCE4_TROUBLESHOOTING.md](XFCE4_TROUBLESHOOTING.md)** - 🔋 **Battery not showing in XFCE4? Start here!**
+- **[QUICK_FIX.md](QUICK_FIX.md)** - ⚡ **Top 5 common issues and fast solutions**
 - **[HARDWARE.md](HARDWARE.md)** - Complete hardware configuration guide with all device IDs, GPIO pins, I2C addresses, and register mappings
 - **[CODE_EXPLAINED.md](CODE_EXPLAINED.md)** - Detailed code explanation of how the daemon works
 - **[INSTALLATION_VERIFICATION.md](INSTALLATION_VERIFICATION.md)** - Installation verification checklist
