@@ -7,7 +7,27 @@ Requires=dbus.service
 Type=simple
 ExecStart=/usr/local/bin/argon-one-up-daemon
 Restart=always
+RestartSec=5
 User=root
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+
+# Device access (includes support for Raspberry Pi 5 and Compute Module 5 - gpiochip4)
+DeviceAllow=/dev/i2c-1 rw
+DeviceAllow=/dev/gpiochip0 rw
+DeviceAllow=/dev/gpiochip1 rw
+DeviceAllow=/dev/gpiochip2 rw
+DeviceAllow=/dev/gpiochip3 rw
+DeviceAllow=/dev/gpiochip4 rw
+
+# Supplementary groups for device access
+SupplementaryGroups=i2c gpio
 
 [Install]
 WantedBy=multi-user.target

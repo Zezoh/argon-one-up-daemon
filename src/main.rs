@@ -1,6 +1,22 @@
 // Argon ONE UP Laptop Daemon (Integrated Version)
-// V6.5 - Fixed AC detection and CW2217B native current registers
 // License: GPL-3.0
+//
+// Hardware Configuration:
+// - Battery IC: CellWise CW2217B at I2C address 0x64 on bus 1
+// - GPIO Pin 4: Power button (active low, pull-up enabled)
+// - GPIO Pin 27: Lid sensor (active low, pull-up enabled)
+// 
+// Supported Platforms:
+// - Raspberry Pi 3 (BCM2835/BCM2837, gpiochip0)
+// - Raspberry Pi 4 (BCM2711, gpiochip0)
+// - Raspberry Pi 5 (RP1, gpiochip4)
+// - Compute Module 4 (BCM2711, gpiochip0)
+// - Compute Module 5 (RP1, gpiochip4)
+//
+// See HARDWARE.md for complete hardware specifications
+// See CODE_EXPLAINED.md for detailed code documentation
+
+const VERSION: &str = "V6.5";
 
 use rppal::i2c::I2c;
 use rppal::gpio::{Gpio, Trigger};
@@ -8,22 +24,34 @@ use std::thread;
 use std::time::Duration;
 use std::sync::{Arc, RwLock};
 use std::env;
+use std::collections::VecDeque;
+use std::process::Command;
 use zbus::{interface, connection::Builder};
+use log::{info, warn, error, debug};
+use env_logger;
 
 // Hardware constants for the Argon ONE UP (Laptop Model)
 const R_SENSE: f64 = 10.0;
 const PIN_LID: u8 = 27;
 
+// CW2217B Datasheet Constants
+const VCELL_LSB_VOLTS: f64 = 305e-6;  // 305 µV per LSB
+const TEMP_LSB_SCALE: f64 = 10.0;     // Temperature resolution: 0.1°C per LSB
+const TEMP_OFFSET_CELSIUS: f64 = 40.0; // Temperature offset per datasheet
+const CURRENT_SCALE_FACTOR: f64 = 52.4; // Current calculation scaling factor from datasheet
+const CURRENT_ADC_RESOLUTION: f64 = 32768.0; // 15-bit signed ADC resolution
+
 // IC: CellWise CW2217B (CW2217BAAD)
 const ADDR_BATTERY: u8 = 0x64;
 const REG_CONTROL: u8 = 0x01;
-const REG_ICSTATE: u8 = 0x03;
+const REG_ICSTATE: u8 = 0xA0;
 const PIN_SHUTDOWN: u8 = 4;
 const VCELL_H: u8 = 0x02;
 const VCELL_L: u8 = 0x03;
 const SOC_H: u8 = 0x04;
 const SOC_L: u8 = 0x05;
-const TEMP: u8 = 0x06;
+const TEMP_H: u8 = 0x06;
+const TEMP_L: u8 = 0x07;
 const CURRENT_H: u8 = 0x0E;
 const CURRENT_L: u8 = 0x0F;
 
@@ -48,16 +76,20 @@ struct UPowerManager {
 #[interface(name = "org.freedesktop.UPower")]
 impl UPowerManager {
     fn enumerate_devices(&self) -> Vec<zbus::zvariant::OwnedObjectPath> {
+        const BATTERY_PATH: &str = "/org/freedesktop/UPower/devices/battery_argon";
         vec![
-            zbus::zvariant::ObjectPath::from_static_str("/org/freedesktop/UPower/devices/battery_argon")
-                .unwrap()
+            // This static string is known to be valid, so expect() is safe here
+            zbus::zvariant::ObjectPath::from_static_str(BATTERY_PATH)
+                .expect("Static object path is valid")
                 .into()
         ]
     }
 
     fn get_display_device(&self) -> zbus::zvariant::OwnedObjectPath {
-        zbus::zvariant::ObjectPath::from_static_str("/org/freedesktop/UPower/devices/battery_argon")
-            .unwrap()
+        const BATTERY_PATH: &str = "/org/freedesktop/UPower/devices/battery_argon";
+        // This static string is known to be valid, so expect() is safe here
+        zbus::zvariant::ObjectPath::from_static_str(BATTERY_PATH)
+            .expect("Static object path is valid")
             .into()
     }
 
@@ -68,12 +100,12 @@ impl UPowerManager {
 
     #[zbus(property)]
     fn on_battery(&self) -> bool {
-        !self.state.read().unwrap().ac_present
+        !self.state.read().map(|s| s.ac_present).unwrap_or(false)
     }
 
     #[zbus(property)]
     fn lid_is_closed(&self) -> bool {
-        self.state.read().unwrap().lid_closed
+        self.state.read().map(|s| s.lid_closed).unwrap_or(false)
     }
 
     #[zbus(property)]
@@ -96,17 +128,17 @@ struct ArgonBattery {
 impl ArgonBattery {
     #[zbus(property)]
     fn percentage(&self) -> f64 {
-        self.state.read().unwrap().soc
+        self.state.read().map(|s| s.soc).unwrap_or(0.0)
     }
 
     #[zbus(property)]
     fn voltage(&self) -> f64 {
-        self.state.read().unwrap().voltage
+        self.state.read().map(|s| s.voltage).unwrap_or(0.0)
     }
 
     #[zbus(property)]
     fn energy(&self) -> f64 {
-        self.state.read().unwrap().soc * 0.5521
+        self.state.read().map(|s| s.soc * 0.5521).unwrap_or(0.0)
     }
 
     #[zbus(property)]
@@ -121,12 +153,12 @@ impl ArgonBattery {
 
     #[zbus(property)]
     fn energy_rate(&self) -> f64 {
-        self.state.read().unwrap().power
+        self.state.read().map(|s| s.power).unwrap_or(0.0)
     }
 
     #[zbus(property)]
     fn state(&self) -> u32 {
-        self.state.read().unwrap().state
+        self.state.read().map(|s| s.state).unwrap_or(0)
     }
 
     #[zbus(property)]
@@ -153,19 +185,18 @@ impl ArgonBattery {
 
 struct HardwareManager {
     i2c: I2c,
-    debug: bool,
-    ac_history: Vec<bool>,
+    ac_history: VecDeque<bool>,
 }
 
 impl HardwareManager {
-    fn new(debug: bool) -> Self {
-        let mut i2c = I2c::with_bus(1).expect("Could not open I2C Bus 1");
-        i2c.set_slave_address(ADDR_BATTERY as u16).expect("Could not set I2C slave address");
-        HardwareManager { i2c, debug, ac_history: Vec::new() }
+    fn new(_debug: bool) -> Result<Self, String> {
+        let mut i2c = I2c::with_bus(1).map_err(|e| format!("Could not open I2C Bus 1: {}", e))?;
+        i2c.set_slave_address(ADDR_BATTERY as u16).map_err(|e| format!("Could not set I2C slave address: {}", e))?;
+        Ok(HardwareManager { i2c, ac_history: VecDeque::new() })
     }
 
     fn init(&mut self) -> bool {
-        if self.debug { println!("[DEBUG] Initiating CW2217B controller activation..."); }
+        debug!("Initiating CW2217B controller activation...");
         let mut retries = 3;
 
         while retries > 0 {
@@ -179,7 +210,7 @@ impl HardwareManager {
             while wait_secs > 0 {
                 let status = self.read_byte(REG_ICSTATE);
                 if status != 255 && status != 0 && (status & 0x0C) != 0 {
-                    if self.debug { println!("[DEBUG] CW2217B Active. State: 0x{:02X}", status); }
+                    debug!("CW2217B Active. State: 0x{:02X}", status);
                     return true;
                 }
                 thread::sleep(Duration::from_secs(1));
@@ -200,37 +231,44 @@ impl HardwareManager {
     fn update_status(&mut self, lid_is_low: bool) -> Option<BatteryState> {
 
 
-        let v_raw = self.read_byte(VCELL_H);
-        let s_raw = self.read_byte(VCELL_L);
+        let v_raw_h = self.read_byte(VCELL_H);
+        let v_raw_l = self.read_byte(VCELL_L);
         let soc_raw_high = self.read_byte(SOC_H);
         let soc_raw_low = self.read_byte(SOC_L);
-        let temperature_raw = self.read_byte(TEMP);
+        let temp_h = self.read_byte(TEMP_H);
+        let temp_l = self.read_byte(TEMP_L);
         let current_raw_high = self.read_byte(CURRENT_H);
         let current_raw_low = self.read_byte(CURRENT_L);
 
-        if (v_raw == 255 || v_raw == 0) && (soc_raw_high == 255 || soc_raw_high == 0) {
+        if (v_raw_h == 255 || v_raw_h == 0) && (soc_raw_high == 255 || soc_raw_high == 0) {
             return None;
         }
 
-        let voltage = v_raw as f64 * 0.24;
-        let soc = if soc_raw_high > 100 { 100.0 } else { soc_raw_high as f64 };
+        // Fix voltage calculation - use both high and low bytes (14-bit value)
+        let raw_voltage = ((v_raw_h as u16) << 8) | (v_raw_l as u16);
+        let voltage = raw_voltage as f64 * VCELL_LSB_VOLTS;
+
+        // Fix SOC calculation - use both high and low bytes
+        let soc = (soc_raw_high as f64) + (soc_raw_low as f64 / 256.0);
+        let soc = soc.clamp(0.0, 100.0);
 
         // Process Current (Signed 16-bit integer)
         let raw_current = (((current_raw_high as u16) << 8) | (current_raw_low as u16)) as i16;
 
-        let temperature = (temperature_raw * 2) as f64 / 10.0;
-        // CW2217B Current Calculation:
+        // Fix temperature calculation - use both high and low bytes (16-bit value)
+        let temp_raw = ((temp_h as u16) << 8) | (temp_l as u16);
+        let temperature = temp_raw as f64 / TEMP_LSB_SCALE - TEMP_OFFSET_CELSIUS;
 
-        let current = (52.4 * raw_current as f64 ) / (32768.0 * R_SENSE);
-        // let current = raw_current as f64 / 4000.0;
+        // CW2217B Current Calculation per datasheet
+        let current = (CURRENT_SCALE_FACTOR * raw_current as f64) / (CURRENT_ADC_RESOLUTION * R_SENSE);
         let power = (voltage * current).abs();
 
         // AC DETECTION LOGIC:
         let raw_ac = current > 0.0;
 
         // Debounce AC detection
-        self.ac_history.push(raw_ac);
-        if self.ac_history.len() > 3 { self.ac_history.remove(0); }
+        self.ac_history.push_back(raw_ac);
+        if self.ac_history.len() > 3 { self.ac_history.pop_front(); }
         let ac_present = self.ac_history.iter().filter(|&&x| x).count() >= 2;
 
         let state = if !ac_present {
@@ -243,12 +281,10 @@ impl HardwareManager {
             1 // Charging Fallback
         };
 
-        if self.debug {
-            println!("[DEBUG] CW2217B -> V: {:.2}V | I: {:.3}A | P: {:.2}W | SOC: {:.1}% | Temperature: {:.4} | AC: {} | Lid: {}",
+        debug!("CW2217B -> V: {:.2}V | I: {:.3}A | P: {:.2}W | SOC: {:.1}% | Temperature: {:.1}°C | AC: {} | Lid: {}",
                      voltage, current, power, soc, temperature,
                      if ac_present { "YES" } else { "NO" },
                      if lid_is_low { "CLOSED" } else { "OPEN" });
-        }
 
         Some(BatteryState {
             soc,
@@ -265,24 +301,35 @@ impl HardwareManager {
 
 #[tokio::main]
 async fn main() -> zbus::Result<()> {
+    env_logger::init();
+    
     let args: Vec<String> = env::args().collect();
     let debug_mode = args.iter().any(|arg| arg == "--debug" || arg == "-d");
 
-    println!("--- Argon ONE UP Rust Manager (V6.4 Stable) ---");
+    info!("--- Argon ONE UP Rust Manager ({}) ---", VERSION);
 
-    let gpio = Gpio::new().expect("GPIO Error");
-    let mut hw = HardwareManager::new(debug_mode);
+    let gpio = Gpio::new().map_err(|e| {
+        error!("GPIO initialization error: {}", e);
+        zbus::Error::Failure(format!("GPIO Error: {}", e))
+    })?;
+    let mut hw = HardwareManager::new(debug_mode).map_err(|e| {
+        error!("Hardware initialization error: {}", e);
+        zbus::Error::Failure(e)
+    })?;
 
     thread::sleep(Duration::from_millis(500));
     if !hw.init() {
-        println!("[WARNING] Hardware activation sequence timed out.");
+        warn!("Hardware activation sequence timed out.");
     }
 
-    let lid_pin = gpio.get(PIN_LID).unwrap().into_input_pullup();
+    let lid_pin = gpio.get(PIN_LID).map_err(|e| {
+        error!("Failed to get lid pin: {}", e);
+        zbus::Error::Failure(format!("Failed to get lid pin: {}", e))
+    })?.into_input_pullup();
 
     let initial_state = loop {
         if let Some(state) = hw.update_status(lid_pin.is_low()) {
-            println!("Battery controller synchronized.");
+            info!("Battery controller synchronized.");
             break state;
         }
         hw.init();
@@ -311,8 +358,20 @@ async fn main() -> zbus::Result<()> {
         .await?;
 
     thread::spawn(move || {
-        let gpio_btn = Gpio::new().expect("GPIO Error");
-        let mut shutdown_pin = gpio_btn.get(PIN_SHUTDOWN).unwrap().into_input_pullup();
+        let gpio_btn = match Gpio::new() {
+            Ok(g) => g,
+            Err(e) => {
+                error!("Failed to initialize GPIO for shutdown button: {}", e);
+                return;
+            }
+        };
+        let mut shutdown_pin = match gpio_btn.get(PIN_SHUTDOWN) {
+            Ok(pin) => pin.into_input_pullup(),
+            Err(e) => {
+                error!("Failed to get shutdown pin: {}", e);
+                return;
+            }
+        };
         let _ = shutdown_pin.set_interrupt(Trigger::FallingEdge, Some(Duration::from_millis(10)));
         loop {
             if let Ok(Some(_)) = shutdown_pin.poll_interrupt(true, Some(Duration::from_millis(500))) {
@@ -322,7 +381,10 @@ async fn main() -> zbus::Result<()> {
                         dur += 1;
                         thread::sleep(Duration::from_millis(100));
                     }
-                    if dur >= 30 { println!("Soft-shutdown signal detected!"); }
+                    if dur >= 30 {
+                        warn!("Soft-shutdown signal detected!");
+                        let _ = Command::new("shutdown").args(["-h", "now"]).spawn();
+                    }
                 }
             }
         }
@@ -334,23 +396,29 @@ async fn main() -> zbus::Result<()> {
         if let Some(new_state) = hw.update_status(lid_pin.is_low()) {
             let mut changed = false;
             {
-                let mut w = shared_state.write().unwrap();
-                let last = last_broadcast_state.read().unwrap();
-
-                if new_state.state != last.state ||
-                   new_state.ac_present != last.ac_present ||
-                   new_state.lid_closed != last.lid_closed ||
-                   (new_state.soc - last.soc).abs() > 0.5 ||
-                   (new_state.power - last.power).abs() > 0.05
-                {
-                    changed = true;
+                if let (Ok(mut w), Ok(last)) = (shared_state.write(), last_broadcast_state.read()) {
+                    if new_state.state != last.state ||
+                       new_state.ac_present != last.ac_present ||
+                       new_state.lid_closed != last.lid_closed ||
+                       (new_state.soc - last.soc).abs() > 0.5 ||
+                       (new_state.power - last.power).abs() > 0.05
+                    {
+                        changed = true;
+                    }
+                    *w = new_state;
+                } else {
+                    error!("Failed to acquire lock on shared state");
+                    continue;
                 }
-                *w = new_state;
             }
 
             if changed {
-                let mut last_w = last_broadcast_state.write().unwrap();
-                *last_w = new_state;
+                if let Ok(mut last_w) = last_broadcast_state.write() {
+                    *last_w = new_state;
+                } else {
+                    error!("Failed to acquire lock on last_broadcast_state");
+                    continue;
+                }
 
                 let bat_ctx = battery_iface.signal_context();
                 let bat_inst = battery_iface.get().await;
@@ -365,7 +433,7 @@ async fn main() -> zbus::Result<()> {
                 let _ = mgr_inst.on_battery_changed(mgr_ctx).await;
                 let _ = mgr_inst.lid_is_closed_changed(mgr_ctx).await;
 
-                println!("[EVENT] SOC: {}% | P: {:.2}W | AC: {} | State: {}",
+                info!("[EVENT] SOC: {:.1}% | P: {:.2}W | AC: {} | State: {}",
                     new_state.soc,
                     new_state.power,
                     if new_state.ac_present { "YES" } else { "NO" },
