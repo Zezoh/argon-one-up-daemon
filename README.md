@@ -27,7 +27,7 @@ Before installing, ensure that I2C is enabled on your Raspberry Pi:
 Ensure Rust and Cargo are installed:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf [https://sh.rustup.rs](https://sh.rustup.rs) | sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
 ### 2. Configure D-Bus Policy
