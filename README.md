@@ -68,6 +68,60 @@ sudo systemctl enable --now argon-one-up-daemon
 
 ## Troubleshooting
 
+### 🔋 Battery Not Showing in XFCE4 Taskbar?
+
+**Run the diagnostic script first:**
+
+```bash
+bash check-battery.sh
+```
+
+This will automatically check:
+- Daemon status
+- D-Bus registration
+- Battery device
+- Hardware I2C
+- XFCE4 configuration
+- Common conflicts
+
+**For detailed troubleshooting:** See **[XFCE4_TROUBLESHOOTING.md](XFCE4_TROUBLESHOOTING.md)**
+
+This comprehensive guide covers:
+- Step-by-step diagnostics
+- XFCE4 panel configuration
+- D-Bus verification
+- Common issues and solutions
+- Complete diagnostic commands
+
+### Quick Checks
+
+If battery isn't showing, run these commands:
+
+```bash
+# 1. Check daemon is running
+sudo systemctl status argon-one-up-daemon
+
+# 2. Verify D-Bus registration
+dbus-send --system --print-reply --dest=org.freedesktop.DBus \
+  /org/freedesktop/DBus org.freedesktop.DBus.ListNames | grep UPower
+
+# 3. Check battery hardware
+sudo i2cdetect -y 1
+# Should show device at address 64
+
+# 4. View recent logs
+sudo journalctl -u argon-one-up-daemon -n 20
+```
+
+### XFCE Desktop Environment
+
+The daemon integrates with XFCE's power manager through UPower. To see battery status:
+
+1. **Right-click** on the XFCE panel
+2. Select **Panel** → **Add New Items...**
+3. Find and add **"Battery Monitor"** plugin
+4. Or use the built-in power manager: `xfce4-power-manager-settings`
+
 ### Raspberry Pi 5 and Compute Module 5 (CM5) Notes
 
 On Raspberry Pi 5 and CM5, the GPIO controller has changed from BCM2711 to RP1. The daemon automatically detects and uses the correct GPIO chip. If you encounter GPIO-related errors:
@@ -76,13 +130,6 @@ On Raspberry Pi 5 and CM5, the GPIO controller has changed from BCM2711 to RP1. 
 2. Check that `/dev/gpiochip4` exists: `ls -l /dev/gpiochip*`
 3. Ensure I2C is enabled in `raspi-config`
 4. Verify battery IC is detected: `sudo i2cdetect -y 1` (should show device at 0x64)
-
-### XFCE Desktop Environment
-
-The daemon integrates with XFCE's power manager through UPower. To see battery status:
-
-1. Add the **Battery Monitor** plugin to your XFCE panel
-2. Or use the built-in power manager: `xfce4-power-manager-settings`
 
 ### Verifying Operation
 
@@ -106,8 +153,10 @@ dbus-send --system --print-reply --dest=org.freedesktop.UPower \
 
 ## Documentation
 
+- **[XFCE4_TROUBLESHOOTING.md](XFCE4_TROUBLESHOOTING.md)** - 🔋 **Battery not showing in XFCE4? Start here!**
 - **[HARDWARE.md](HARDWARE.md)** - Complete hardware configuration guide with all device IDs, GPIO pins, I2C addresses, and register mappings
 - **[CODE_EXPLAINED.md](CODE_EXPLAINED.md)** - Detailed code explanation of how the daemon works
+- **[INSTALLATION_VERIFICATION.md](INSTALLATION_VERIFICATION.md)** - Installation verification checklist
 
 ## License
 
